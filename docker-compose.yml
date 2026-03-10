@@ -6,7 +6,7 @@ services:
     container_name: rag-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "3002:3002"
     env_file:
       - .env
     healthcheck:
