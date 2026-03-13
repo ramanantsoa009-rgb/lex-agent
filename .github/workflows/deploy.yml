@@ -1,66 +1,73 @@
-# ══════════════════════════════════════════════════════════════
-# NOM DU WORKFLOW (apparaît dans l'onglet Actions de GitHub)
-# ══════════════════════════════════════════════════════════════
+# .github/workflows/deploy.yml
+
 name: Build & Deploy to Nexsus VPS
 
-# ══════════════════════════════════════════════════════════════
-# QUAND EST-CE QUE ÇA SE DÉCLENCHE ?
-# → Uniquement quand tu fais "git push" sur la branche "main"
-# → Si tu push sur une autre branche → RIEN ne se passe
-# ══════════════════════════════════════════════════════════════
+# Se declenche uniquement sur un push vers la branche main
 on:
   push:
     branches:
       - main
 
-# ══════════════════════════════════════════════════════════════
-# VARIABLES utilisables partout dans le workflow
-# ══════════════════════════════════════════════════════════════
+# Variables globales
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # github.repository = "ton-username/ton-repo"
-  # Donc l'image sera : ghcr.io/ton-username/ton-repo:latest
 
-# ══════════════════════════════════════════════════════════════
-# LES JOBS (les étapes principales)
-# ══════════════════════════════════════════════════════════════
 jobs:
 
-  # ┌──────────────────────────────────────────────────────────┐
-  # │ JOB 1 : CONSTRUIRE L'IMAGE ET LA POUSSER SUR LE REGISTRY│
-  # │                                                          │
-  # │ C'est comme faire "docker build" + "docker push"         │
-  # │ mais sur les serveurs de GitHub (pas sur ton PC)         │
-  # └──────────────────────────────────────────────────────────┘
+  # -------------------------------------------------
+  # JOB 1 : TESTS
+  # Lance les tests Python avant de construire l'image
+  # Si les tests echouent, rien ne se deploie
+  # -------------------------------------------------
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dependances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest httpx
+
+      - name: Lancer les tests
+        run: |
+          pytest tests/ -v
+
+  # -------------------------------------------------
+  # JOB 2 : BUILD & PUSH
+  # Construit l'image Docker et la pousse sur ghcr.io
+  # Ne se lance que si les tests sont passes
+  # -------------------------------------------------
   build-and-push:
     name: Build & Push docker image to GitHub Container Registry
     runs-on: ubuntu-latest
-    # ↑ GitHub te prête une machine Ubuntu pour exécuter ça
-
-    # Permissions nécessaires pour pousser sur ghcr.io
+    needs: test
     permissions:
       contents: read
       packages: write
 
     steps:
-      # ÉTAPE 1 : Récupérer le code du repo
       - name: Checkout du code
         uses: actions/checkout@v4
-        # ↑ Équivalent de "git clone" sur la machine GitHub
 
-      # ÉTAPE 2 : Se connecter au registry Docker de GitHub
       - name: Login GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          # ↑ GITHUB_TOKEN est fourni AUTOMATIQUEMENT par GitHub
-          # Pas besoin de le créer dans les secrets !
 
-      # ÉTAPE 3 : Générer les tags pour l'image
-      - name: Préparer les tags
+      - name: Preparer les tags
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -68,60 +75,49 @@ jobs:
           tags: |
             type=raw,value=latest
             type=sha,prefix=
-          # Résultat : 2 tags
-          #   ghcr.io/ton-user/ton-repo:latest
-          #   ghcr.io/ton-user/ton-repo:a1b2c3d  (hash du commit)
 
-      # ÉTAPE 4 : Construire et pousser l'image
-      - name: 🔨 Build & Push
+      - name: Build et Push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          # ↑ Fait "docker build ." puis "docker push" vers ghcr.io
 
-  # ┌──────────────────────────────────────────────────────────┐
-  # │ JOB 2 : DÉPLOYER SUR LE VPS                             │
-  # │                                                          │
-  # │ Se connecte en SSH à ton VPS et remplace le container    │
-  # │ needs: build-and-push → attend que le job 1 soit fini   │
-  # └──────────────────────────────────────────────────────────┘
+  # -------------------------------------------------
+  # JOB 3 : DEPLOY
+  # Se connecte en SSH au VPS et remplace le container
+  # Ne se lance que si le build est passe
+  # -------------------------------------------------
   deploy:
-    name: 🚀 Deploy to VPS
+    name: Deploy to VPS
     runs-on: ubuntu-latest
     needs: build-and-push
-    # ↑ IMPORTANT : ce job ne démarre QUE si build-and-push a réussi
 
     steps:
-      - name: 📡 Déployer via SSH sur Nexsus VPS
+      - name: Deployer via SSH sur Nexsus VPS
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          # ↑ Utilise tes secrets GitHub pour se connecter en SSH
-
           script: |
-            # --- Commandes exécutées SUR TON VPS ---
-
-            # 1. Se connecter au registry GitHub depuis le VPS
+            # Se connecter au registry GitHub depuis le VPS
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            # 2. Aller dans le dossier où se trouvent docker-compose.yml et .env
-            cd /home/${{ secrets.VPS_USER }}/mon-projet
+            # Aller dans le dossier du projet
+            cd /opt/lex-agent
 
-            # 3. Télécharger la nouvelle image
+            # Telecharger la nouvelle image
             docker pull ghcr.io/${{ github.repository }}:latest
 
-            # 4. Arrêter l'ancien container
+            # Arreter l'ancien container
             docker compose down
 
-            # 5. Démarrer le nouveau container (utilise le .env existant)
+            # Demarrer le nouveau container
             docker compose up -d
 
-            # 6. Supprimer les vieilles images inutilisées
+            # Supprimer les vieilles images
             docker image prune -f
 
-            echo "✅ Déploiement terminé !"
+            echo "Deploiement termine"
