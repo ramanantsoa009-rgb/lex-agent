@@ -35,7 +35,7 @@ agent = create_tool_calling_agent(IA, tools, prompt)
 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
-app = FastAPI(title="LexMaurice API", version="1.0.0")
+app = FastAPI(title="LexMaurice API - Update Test", version="1.0.0")
 
 # CORS — autorise ton app Lovable à appeler l'API
 allowed_origins = os.getenv(
