@@ -1,14 +1,10 @@
-# .github/workflows/deploy.yml
-
 name: Build & Deploy to Nexsus VPS
 
-# Se declenche uniquement sur un push vers la branche main
 on:
   push:
     branches:
       - main
 
-# Variables globales
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -17,12 +13,16 @@ jobs:
 
   # -------------------------------------------------
   # JOB 1 : TESTS
-  # Lance les tests Python avant de construire l'image
-  # Si les tests echouent, rien ne se deploie
   # -------------------------------------------------
   test:
     name: Tests
     runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      SUPABASE_TABLE_NAME: ${{ secrets.SUPABASE_TABLE_NAME }}
+      SUPABASE_QUERY_NAME: ${{ secrets.SUPABASE_QUERY_NAME }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
 
     steps:
       - name: Checkout du code
@@ -45,8 +45,6 @@ jobs:
 
   # -------------------------------------------------
   # JOB 2 : BUILD & PUSH
-  # Construit l'image Docker et la pousse sur ghcr.io
-  # Ne se lance que si les tests sont passes
   # -------------------------------------------------
   build-and-push:
     name: Build & Push docker image to GitHub Container Registry
@@ -85,8 +83,6 @@ jobs:
 
   # -------------------------------------------------
   # JOB 3 : DEPLOY
-  # Se connecte en SSH au VPS et remplace le container
-  # Ne se lance que si le build est passe
   # -------------------------------------------------
   deploy:
     name: Deploy to VPS
@@ -102,22 +98,15 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           script: |
-            # Se connecter au registry GitHub depuis le VPS
             echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            # Aller dans le dossier du projet
             cd /opt/lex-agent
 
-            # Telecharger la nouvelle image
             docker pull ghcr.io/${{ github.repository }}:latest
 
-            # Arreter l'ancien container
             docker compose down
-
-            # Demarrer le nouveau container
             docker compose up -d
 
-            # Supprimer les vieilles images
             docker image prune -f
 
             echo "Deploiement termine"
