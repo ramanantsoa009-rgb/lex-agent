@@ -9,7 +9,7 @@ class Config_IA:
     TEMPERATURE: float = 0
     MAX_RETRIES: int = 3
     EMBEDDING_MODEL: str = "mistral-embed"
-    TOP_K_RESULTS: int = 5
+    TOP_K_RESULTS: int = 4
 
 # exporter la classe Config
 conf_ia = Config_IA()

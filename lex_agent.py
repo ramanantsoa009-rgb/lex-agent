@@ -9,7 +9,7 @@ from typing import List
 
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_mistralai import ChatMistralAI
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage, HumanMessage
 from config_ia.conf_ia import conf_ia
 from tools.tool_retriever import retrieve
@@ -26,6 +26,7 @@ IA = ChatMistralAI(
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_prompt.SYSTEM_PROMPT),
+    MessagesPlaceholder(variable_name="chat_history"),
     ("human", "{input}"),
     ("placeholder", "{agent_scratchpad}"),
 ])
@@ -61,6 +62,9 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     message: str
+    source: str
+    code: str = "200"
+    formattedError: str = ""
 
 # ── Conversion du format frontend vers format LangChain ───────────────────────
 def to_langchain_history(messages: List[Message]):
@@ -94,14 +98,36 @@ async def chat(request: ChatRequest):
     chat_history = to_langchain_history(request.messages)
 
     try:
+        # Récupération forcée — le modèle 3B ne call pas le tool de lui-même
+        retrieved_content, _ = retrieve.func(current_question)
+
+        # Injection du contexte directement dans le prompt
+        enriched_input = (
+            f"<retrieved_context>\n{retrieved_content}\n</retrieved_context>\n\n"
+            f"{current_question}"
+        )
+
         result = agent_executor.invoke({
-            "input": current_question,
+            "input": enriched_input,
             "chat_history": chat_history,
         })
-        return ChatResponse(message=result["output"])
+
+        # Extraction des sources depuis le contenu récupéré
+        sources = [line for line in retrieved_content.split('\n') if line.startswith("Source: ")]
+        source_str = "\n".join(sources) if sources else "No sources available"
+
+        return ChatResponse(message=result["output"], source=source_str)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_str = str(e)
+        if "57014" in error_str or "statement timeout" in error_str.lower():
+            return ChatResponse(
+                message="La base de données juridique est temporairement indisponible (délai de recherche dépassé). Veuillez réessayer dans quelques instants.",
+                source="No sources available",
+                code="503",
+                formattedError="statement timeout"
+            )
+        raise HTTPException(status_code=500, detail=error_str)
 
 
 # ── Lancement direct ──────────────────────────────────────────────────────────
